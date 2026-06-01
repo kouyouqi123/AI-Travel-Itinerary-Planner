@@ -2,16 +2,13 @@
 Researcher agent: given a destination + activity query, returns 4-5 real options.
 
 Idempotency: caller should check Option.research_hash before calling.
-Rate limiting: tenacity exponential backoff on 429/5xx.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from google.adk.tools import google_search
-
-from src.agents.base import LlmAgent, _extract_json, _extract_json_dict
+from src.agents.base import AgentProvider, _extract_json, _extract_json_dict
 
 RESEARCHER_INSTRUCTION = """You are a travel research assistant helping plan a trip itinerary.
 
@@ -53,7 +50,7 @@ def _build_batch_prompt(destination: str, activities: list[dict]) -> str:
 
 
 def _build_prompt(destination: str, query: str, is_specific: bool) -> str:
-    specificity = "The user already has a specific place in mind." if is_specific else "This is a general activity — find 4-8 good options."
+    specificity = "The user already has a specific place in mind." if is_specific else "This is a general activity — find 4-5 good options."
     return (
         f"Destination: {destination}\n"
         f"Activity query: {query}\n"
@@ -81,15 +78,11 @@ def _normalize(raw: list[Any], research_hash: str) -> list[dict]:
     return [o for o in out if o["name"]]
 
 
-class ResearcherAgent(LlmAgent):
-    def __init__(self) -> None:
-        super().__init__(
-            name="ResearcherAgent",
-            instruction=RESEARCHER_INSTRUCTION,
-            tools=[google_search],
-            retry_attempts=5,
-            retry_exp_base=7,
-        )
+class ResearcherAgent:
+    """Provider-agnostic researcher. All LLM calls go through the injected provider."""
+
+    def __init__(self, provider: AgentProvider) -> None:
+        self._provider = provider
 
     async def research(
         self,
@@ -99,7 +92,7 @@ class ResearcherAgent(LlmAgent):
         research_hash: str = "",
     ) -> tuple[list[dict], str]:
         prompt = _build_prompt(destination, query, is_specific)
-        text, err = await self.ask(prompt)
+        text, err = await self._provider.ask(prompt)
         if err:
             return [], err
         raw = _extract_json(text)
@@ -109,8 +102,13 @@ class ResearcherAgent(LlmAgent):
         return (options, "") if options else ([], "Agent returned no valid options.")
 
 
-# Lazy singleton — constructed on first call so env vars are loaded before init.
+# Lazy singleton — set by setup_agents() at startup; falls back to openai if not configured.
 _researcher: ResearcherAgent | None = None
+
+
+def _default_researcher() -> ResearcherAgent:
+    from src.agents.base import create_provider
+    return ResearcherAgent(create_provider("openai", RESEARCHER_INSTRUCTION, enable_search=True))
 
 
 async def research_activity(
@@ -126,7 +124,7 @@ async def research_activity(
     """
     global _researcher
     if _researcher is None:
-        _researcher = ResearcherAgent()
+        _researcher = _default_researcher()
     return await _researcher.research(destination, query, is_specific, research_hash)
 
 
@@ -134,7 +132,7 @@ async def research_activities_batch(
     destination: str,
     activities: list[dict],
 ) -> list[tuple[list[dict], str]]:
-    """Research up to 5 activities in a single API call.
+    """Research up to 10 activities in a single API call.
 
     Each activity dict needs: query, is_specific (bool), research_hash (str).
     Returns a list of (options, error) in the same order as the input.
@@ -143,9 +141,9 @@ async def research_activities_batch(
         return []
     global _researcher
     if _researcher is None:
-        _researcher = ResearcherAgent()
+        _researcher = _default_researcher()
     prompt = _build_batch_prompt(destination, activities)
-    text, err = await _researcher.ask(prompt)
+    text, err = await _researcher._provider.ask(prompt)
     if err:
         return [([], err)] * len(activities)
     raw = _extract_json_dict(text)

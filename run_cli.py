@@ -7,10 +7,13 @@ import sys
 logging.basicConfig(format="%(name)s: %(message)s")
 logging.getLogger("src.agents.base").setLevel(logging.DEBUG)
 
+_PROVIDERS = ("openai", "gemini", "anthropic")
+
 
 def main():
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
+
     json_path = None
     if "--json" in args:
         idx = args.index("--json")
@@ -19,6 +22,23 @@ def main():
         else:
             print("Error: --json requires a file path argument.")
             sys.exit(1)
+
+    provider = "gemini"
+    if "--provider" in args:
+        idx = args.index("--provider")
+        if idx + 1 < len(args):
+            provider = args[idx + 1]
+            if provider not in _PROVIDERS:
+                print(f"Error: --provider must be one of {_PROVIDERS}")
+                sys.exit(1)
+        else:
+            print("Error: --provider requires a value (openai, gemini, anthropic).")
+            sys.exit(1)
+
+    # Skip agent init on dry-run — no API keys needed to validate imports/config.
+    if not dry_run:
+        from src.agents.orchestrator import setup_agents
+        setup_agents(provider=provider)
 
     from src.cli import run_interactive, run_from_json
 

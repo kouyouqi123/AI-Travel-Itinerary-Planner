@@ -19,7 +19,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Optional
 
-from src.agents.base import LlmAgent, _extract_json
+from src.agents.base import AgentProvider, _extract_json
 from src.tools.maps import haversine_km
 
 # Time slot heuristics by category
@@ -226,15 +226,11 @@ def _build_refine_prompt(day_plans: list[DayPlan], destination: str) -> str:
     )
 
 
-class PlannerAgent(LlmAgent):
-    def __init__(self) -> None:
-        super().__init__(
-            name="PlannerAgent",
-            instruction=PLANNER_INSTRUCTION,
-            tools=[],  # add google_search, maps tool here when ready
-            retry_attempts=3,
-            retry_exp_base=5,
-        )
+class PlannerAgent:
+    """Provider-agnostic planner. All LLM calls go through the injected provider."""
+
+    def __init__(self, provider: AgentProvider) -> None:
+        self._provider = provider
 
     async def refine(
         self,
@@ -242,7 +238,7 @@ class PlannerAgent(LlmAgent):
         destination: str,
     ) -> tuple[list[dict], str]:
         prompt = _build_refine_prompt(day_plans, destination)
-        text, err = await self.ask(prompt)
+        text, err = await self._provider.ask(prompt)
         if err:
             return [], err.replace("Agent error", "Planner agent error")
         raw = _extract_json(text)
@@ -251,8 +247,13 @@ class PlannerAgent(LlmAgent):
         return raw if isinstance(raw, list) else [], ""
 
 
-# Lazy singleton — constructed on first call so env vars are loaded before init.
+# Lazy singleton — set by setup_agents() at startup; falls back to openai if not configured.
 _planner: PlannerAgent | None = None
+
+
+def _default_planner() -> PlannerAgent:
+    from src.agents.base import create_provider
+    return PlannerAgent(create_provider("openai", PLANNER_INSTRUCTION, enable_search=False))
 
 
 async def refine_schedule_with_llm(
@@ -266,5 +267,5 @@ async def refine_schedule_with_llm(
     """
     global _planner
     if _planner is None:
-        _planner = PlannerAgent()
+        _planner = _default_planner()
     return await _planner.refine(day_plans, destination)

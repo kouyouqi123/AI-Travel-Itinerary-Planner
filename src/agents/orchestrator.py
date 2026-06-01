@@ -11,9 +11,26 @@ import asyncio
 import hashlib
 from typing import Optional
 
-from src.agents.researcher import research_activity, research_activities_batch
-from src.agents.planner import build_schedule, refine_schedule_with_llm, DayPlan
+import src.agents.researcher as _researcher_mod
+import src.agents.planner as _planner_mod
+from src.agents.researcher import research_activity, research_activities_batch, ResearcherAgent, RESEARCHER_INSTRUCTION
+from src.agents.planner import build_schedule, refine_schedule_with_llm, DayPlan, PlannerAgent, PLANNER_INSTRUCTION
 from src.tools.maps import get_place_info, maps_search_link
+
+
+def setup_agents(provider: str = "openai") -> None:
+    """Initialise providers and inject them into agent singletons.
+
+    Call once at process startup before any research or planning occurs.
+    provider: "openai" | "gemini" | "anthropic"
+    """
+    from src.agents.base import create_provider
+    _researcher_mod._researcher = ResearcherAgent(
+        create_provider(provider, RESEARCHER_INSTRUCTION, enable_search=True)
+    )
+    _planner_mod._planner = PlannerAgent(
+        create_provider(provider, PLANNER_INSTRUCTION, enable_search=False)
+    )
 
 
 def _make_hash(trip_id: int, query: str) -> str:

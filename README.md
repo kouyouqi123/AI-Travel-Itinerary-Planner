@@ -17,7 +17,7 @@ A multi-agent travel itinerary planner powered by Google Gemini. Create trips, r
 ### 1. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+pip install openai anthropic httpx 2>&1 | tail -5
 ```
 
 ### 2. Configure API keys
